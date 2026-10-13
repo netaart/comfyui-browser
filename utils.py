@@ -3,6 +3,8 @@ import json
 from os import path, scandir, makedirs
 import subprocess
 import time
+import re
+import ntpath
 from typing import TypedDict, List
 import requests
 from requests.adapters import HTTPAdapter, Retry
@@ -42,6 +44,9 @@ def get_config():
         "download_logs": path.join(browser_path, 'download_logs'),
         "outputs": output_directory_from_comfyui(),
         "sources": path.join(browser_path, 'sources'),
+        "thumbnail_cache": path.join(browser_path, '.cache', 'thumbnails'),
+        "thumbnail_cache_mb": 512,
+        "thumbnail_size": 384,
     } | load_config()
 
 def load_config():
@@ -73,6 +78,8 @@ class FileInfoDict(TypedDict):
     name: str
     bytes: int
     created_at: float
+    modified_at: float
+    mtime_ns: str
     folder_path: str
     notes: str
 
@@ -108,25 +115,62 @@ def get_parent_path(folder_type: str):
     if folder_type == 'sources':
         return sources_path()
 
-    # outputs
-    return outputs_path()
+    if folder_type == 'outputs':
+        return outputs_path()
+    raise ValueError('Unknown folder type')
+
+
+def resolve_browser_path(folder_type='outputs', folder_path='', filename=''):
+    """Resolve only paths contained in the selected browser root, including symlinks."""
+    root = path.realpath(get_parent_path(folder_type))
+    for value in (folder_path, filename):
+        if not isinstance(value, str) or '\x00' in value:
+            raise ValueError('Invalid path')
+        if ntpath.isabs(value) or ntpath.splitdrive(value)[0] or '\\' in value:
+            raise ValueError('Paths must be relative to the browser root')
+        if '..' in value.split('/'):
+            raise ValueError('Path is outside the browser root')
+    target = path.abspath(path.join(root, folder_path, filename))
+    if path.commonpath([root, path.realpath(target)]) != root:
+        raise ValueError('Path is outside the browser root')
+    return target
+
+
+def natural_name(value):
+    return tuple((1, int(part)) if part.isdigit() else (0, part.casefold())
+                 for part in re.split(r'(\d+)', value))
+
+
+def sort_files(files, sort_by='name', order='asc'):
+    keys = {
+        'name': lambda f: natural_name(f['name']),
+        'mtime': lambda f: f.get('modified_at', 0),
+        'size': lambda f: f.get('bytes', 0),
+        'type': lambda f: path.splitext(f['name'])[1].casefold(),
+    }
+    if sort_by not in keys or order not in ('asc', 'desc'):
+        raise ValueError('Invalid sort field or direction')
+    # Stable secondary name order, with directories first in either direction.
+    files = sorted(files, key=lambda f: natural_name(f['name']))
+    files.sort(key=keys[sort_by], reverse=order == 'desc')
+    files.sort(key=lambda f: f['type'] != 'dir')
+    return files
 
 # folder_type = 'outputs', 'collections', 'sources'
 def get_target_folder_files(folder_path: str, folder_type: str = 'outputs'):
-    if '..' in folder_path:
-        return None
-
-    parent_path = get_parent_path(folder_type)
     files: List[FileInfoDict] = []
-    target_path = path.join(parent_path, folder_path)
+    target_path = resolve_browser_path(folder_type, folder_path)
 
     if not path.exists(target_path):
         return []
 
-    folder_listing = scandir(target_path)
-    folder_listing = sorted(folder_listing, key=lambda f: (f.is_file(), -f.stat().st_ctime))
+    with scandir(target_path) as listing:
+        folder_listing = list(listing)
     for item in folder_listing:
-        if not path.exists(item.path):
+        try:
+            resolve_browser_path(folder_type, folder_path, item.name)
+            stat = item.stat()
+        except (OSError, ValueError):
             continue
 
         name = path.basename(item.path)
@@ -137,12 +181,18 @@ def get_target_folder_files(folder_path: str, folder_type: str = 'outputs'):
             if not (ext in white_extensions):
                 continue
 
-        created_at = item.stat().st_ctime
+        created_at = stat.st_ctime  # Legacy field; ctime is not birth time on Unix.
         info_file_path = get_info_filename(item.path)
         info_data = {}
         if path.exists(info_file_path):
-            with open(info_file_path, 'r') as f:
-                info_data = json.load(f)
+            try:
+                safe_info = resolve_browser_path(folder_type, folder_path, path.basename(info_file_path))
+                with open(safe_info, 'r') as f:
+                    info_data = json.load(f)
+                if not isinstance(info_data, dict):
+                    info_data = {}
+            except (OSError, ValueError):
+                info_data = {}
         if item.is_file():
             bytes = item.stat().st_size
             files.append({
@@ -150,6 +200,8 @@ def get_target_folder_files(folder_path: str, folder_type: str = 'outputs'):
                 "name": name,
                 "bytes": bytes,
                 "created_at": created_at,
+                "modified_at": stat.st_mtime,
+                "mtime_ns": str(stat.st_mtime_ns),
                 "folder_path": folder_path,
                 "notes": info_data.get("notes", "")
             })
@@ -159,6 +211,8 @@ def get_target_folder_files(folder_path: str, folder_type: str = 'outputs'):
                 "name": name,
                 "bytes": 0,
                 "created_at": created_at,
+                "modified_at": stat.st_mtime,
+                "mtime_ns": str(stat.st_mtime_ns),
                 "folder_path": folder_path,
                 "notes": info_data.get("notes", "")
             })

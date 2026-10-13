@@ -4,3 +4,4 @@ collections/
 sources/
 .DS_Store
 download_logs/
+.cache/

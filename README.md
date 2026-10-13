@@ -14,6 +14,10 @@ https://github.com/talesofai/comfyui-browser/assets/828837/803ce57a-1cf2-4e1c-be
 ## Features
 
 - Browse and manage your images/videos/workflows in the output folder.
+- Select files and download a batch as ZIP or gzip-compressed tar (`.tar.gz`).
+- Sort Outputs, Saves, and Sources by filename, modification date, size, or extension.
+- Configure the output browser root from the browser, without restarting ComfyUI.
+- Browse using persistent server-side image thumbnails and optional video posters.
 - Add your workflows to the 'Saves' so that you can switch and manage them more easily.
 - Sync your 'Saves' anywhere by Git.
 - Subscribe workflow sources by Git and load them more easily.
@@ -65,6 +69,12 @@ Install [ComfyUI Manager](https://github.com/ltdrdata/ComfyUI-Manager), search `
 
 #### Configuring
 
+Open **Outputs → Browser settings** to choose an existing absolute directory on
+the **server**, change thumbnail size/cache limits, or clear cached thumbnails.
+The root setting changes immediately for all browser clients. It does not move
+files or change ComfyUI's generation output directory. Existing `config.json`
+settings (including Git sync and other directories) are preserved when saving.
+
 In your `comfyui-browser` directory, you can add a `config.json` to override
 the directories that `comfyui-browser` uses.  Ex:
 
@@ -73,7 +83,10 @@ the directories that `comfyui-browser` uses.  Ex:
   "collections": "/var/lib/comfyui/comfyui-browser-collections",
   "download_logs": "/var/lib/comfyui/comfyui-browser-download-logs",
   "outputs": "/var/lib/comfyui/outputs",
-  "sources": "/var/lib/comfyui/comfyui-browser-sources"
+  "sources": "/var/lib/comfyui/comfyui-browser-sources",
+  "thumbnail_cache": "/var/cache/comfyui-browser/thumbnails",
+  "thumbnail_cache_mb": 512,
+  "thumbnail_size": 384
 }
 ```
 
@@ -84,7 +97,10 @@ The default configuration values are:
   "collections": "[comfyui-browser]/collections",
   "download_logs": "[comfyui-browser]/download-logs",
   "outputs": "[comfyui]/outputs",
-  "sources": "[comfyui-browser]/sources"
+  "sources": "[comfyui-browser]/sources",
+  "thumbnail_cache": "[comfyui-browser]/.cache/thumbnails",
+  "thumbnail_cache_mb": 512,
+  "thumbnail_size": 384
 }
 ```
 
@@ -93,6 +109,41 @@ Where `[comfyui-browser]` is the automatically determined path of your
 path of your `comfyui` server.  Notably, the `outputs` directory defaults to the
 `--output-directory` argument to `comfyui` itself, or the default path that
 `comfyui` wishes to use for the `--output-directory` argument.
+
+The server needs read access to the chosen root and write access to the cache
+and `config.json`. Change `thumbnail_cache` in `config.json` and restart to move
+the cache directory. Thumbnail size is 128–1024 pixels on the longest edge;
+cache limits are 16–16384 MiB. Older previews are evicted as new previews are
+generated. The cache survives restarts, and source modification time, size, and
+thumbnail settings invalidate outdated previews. Clearing it leaves originals intact.
+
+Image previews use Pillow. Video posters use **FFmpeg**, when available on the
+server's PATH; without it, video cards offer **Open original**. Animated images
+use a still preview. Opening/downloading a file always uses the original, and
+workflow loading continues to use its embedded workflow or matching JSON.
+
+### Selection, downloads, and sorting
+
+- Check individual files or use **Select all matching files**, which includes
+  search matches beyond the currently rendered cards. Changing folder, search,
+  or refreshing clears the selection.
+- **Download** saves an individual original file. **Download ZIP** bundles a
+  selection without extra compression (useful for already-compressed media).
+  **Download .tar.gz** packages the selection with gzip compression.
+- **Include matching workflow JSON** includes a same-name `.json` file alongside
+  selected images/videos. Turn it off to export only the selected media.
+- Batches contain files in the current folder, with a limit of 5,000 files
+  (including matching JSON) and 20 GiB of uncompressed data. Folder selection
+  and recursive exports are not included.
+- Archives are prepared on temporary server storage, then streamed through a
+  native browser download. Allow the new download tab if your browser blocks it;
+  preparation errors appear there. Temporary files are removed after completion
+  or disconnect. One archive runs at a time, and sufficient temporary disk
+  space is required for the batch. The frontend does not buffer the archive in RAM.
+- Sort by **Filename**, **Date modified**, **File size**, or **File extension**,
+  ascending or descending. Folders stay first; filename sorting is natural
+  (`image2` before `image10`). Sort preferences are remembered per tab in your
+  browser. Displayed dates are modification dates (not Unix inode-change times).
 
 ### Manually
 
@@ -143,6 +194,22 @@ cd custom_nodes && git clone https://github.com/tzwm/comfyui-browser.git
 - Notes
 
   - Please try to test on Windows, because I only have Linux/macOS
+
+### Checks
+
+```bash
+python -m pip install aiohttp Pillow requests
+python -m unittest discover -s tests -v
+cd svelte
+npm ci
+npm run check
+npm run build
+```
+
+The backend tests use a temporary file tree and stub the ComfyUI imports; no GPU
+or running ComfyUI instance is required. The video test runs when FFmpeg is
+installed. Commit the rebuilt `web/build` assets with frontend changes so a
+normal custom-node installation receives the updated interface.
 
 
 ## TODO

@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { t } from 'svelte-i18n';
-  import { fetchFiles, onLoadWorkflow, onScroll } from './utils';
+  import { fetchFiles, onLoadWorkflow, onScroll, sortBrowserFiles } from './utils';
+  import FileToolbar from './FileToolbar.svelte';
   import MediaShow from './MediaShow.svelte';
   import Toast from './Toast.svelte';
 
@@ -15,7 +16,14 @@
   let configGitRepo = '';
   let showCursor = 20;
   let toast: Toast;
-  let folderPath: string;
+  let folderPath = '';
+  let selected: string[] = [];
+  let sortBy = 'name';
+  let sortOrder = 'asc';
+  let error = '';
+  let requestNumber = 0;
+  $: { searchQuery; selected = []; showCursor = 20; }
+  $: displayedFiles = sortBrowserFiles(files.filter(f => searchRegex.test(f.name.toLowerCase()) || searchRegex.test(f.notes.toLowerCase())), sortBy, sortOrder);
   let loaded: boolean = false;
   let searchQuery = '';
   let searchRegex = new RegExp('');
@@ -35,27 +43,44 @@
   }
 
   async function refresh() {
-    loaded = true;
-    files = await fetchFiles(folderType, comfyUrl, folderPath);
-    loaded = true;
+    const current = ++requestNumber;
+    loaded = false;
+    selected = [];
+    showCursor = 20;
+    error = '';
+    try {
+      const next = await fetchFiles(folderType, comfyUrl, folderPath);
+      if (current === requestNumber) files = next;
+    } catch (err) {
+      if (current === requestNumber) { files = []; error = String(err); }
+    } finally {
+      if (current === requestNumber) loaded = true;
+    }
   }
 
-  onMount(async () => {
+  onMount(() => {
     //@ts-ignore
     comfyApp = window.top.app;
 
     //@ts-ignore
-    window.top.addEventListener("comfyuiBrowserShow", () => {
-      refresh();
-    });
+    const onShow = () => refresh();
+    window.top?.addEventListener("comfyuiBrowserShow", onShow);
 
     folderPath = '';
-    config = (await fetchConfig()) || {};
-    configGitRepo = config?.git_repo;
+    fetchConfig().then(value => {
+      config = value || {};
+      configGitRepo = config?.git_repo || '';
+    }).catch(err => error = String(err));
 
-    window.addEventListener('scroll', () => {
-      showCursor = onScroll(showCursor, files.length);
-    });
+    const onScrollWindow = () => {
+      showCursor = onScroll(showCursor, displayedFiles.length);
+    };
+    window.addEventListener('scroll', onScrollWindow);
+    return () => {
+      window.top?.removeEventListener('comfyuiBrowserShow', onShow);
+      window.removeEventListener('scroll', onScrollWindow);
+      requestNumber++;
+    };
   });
 
   async function fetchConfig() {
@@ -91,7 +116,7 @@
       }),
     });
 
-    fetchConfig();
+    config = await fetchConfig();
     toast.show(
       res.ok,
       tt('toast.configUpdated'),
@@ -261,11 +286,12 @@
   />
 </div>
 
+<FileToolbar files={displayedFiles} bind:selected bind:sortBy bind:sortOrder {folderType} {folderPath} {comfyUrl} />
+{#if error}<p class="alert alert-error" role="alert">{error}</p>{/if}
 <ul class="space-y-2">
-  {#each files
-    .filter((f) => searchRegex.test(f.name.toLowerCase()) || searchRegex.test(f.notes.toLowerCase()))
-    .slice(0, showCursor) as file}
+  {#each displayedFiles.slice(0, showCursor) as file (file.name)}
     <li class="flex h-16 sm:h-28 border-0 space-x-4 p-2 bg-info-content">
+      {#if file.type !== 'dir'}<input class="checkbox checkbox-sm" type="checkbox" bind:group={selected} value={file.name} aria-label={`Select ${file.name}`} />{/if}
       <MediaShow {file} styleClass="w-16 sm:w-28" {onClickDir} />
       <div class="space-y-2 w-96 relative">
         <input
@@ -279,6 +305,7 @@
         </p>
 
         <div class="bottom-0 absolute">
+          {#if file.type !== 'dir'}<a class="btn btn-link btn-sm p-0 no-underline text-accent" href={file.downloadUrl} download>Download</a>{/if}
           {#if comfyApp && file.type != 'dir'}
             <button
               class="btn btn-link btn-sm p-0 no-underline text-accent"
@@ -312,14 +339,14 @@
 </ul>
 
 <div class="flex justify-center">
-  {#if files.length > showCursor}
+  {#if displayedFiles.length > showCursor}
     <button on:click={() => showCursor += 10} class="btn btn-neutral btn-outline">Load more</button>
   {:else}
     <p class="text-neutral-content">No more content.</p>
   {/if}
 </div>
 
-{#if files.length === 0}
+{#if displayedFiles.length === 0 && !error}
   <div class="w-full h-full flex items-center justify-center">
     <span class="font-bold text-4xl">
       {#if loaded}

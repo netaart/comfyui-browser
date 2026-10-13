@@ -15,7 +15,7 @@
       clearInterval(autoRefreshInterval);
     }
   }
-  let autoRefreshInterval: number;
+  let autoRefreshInterval: ReturnType<typeof setInterval>;
 
   async function refreshHistory() {
     const res = await fetch(comfyUrl + '/browser/downloads');

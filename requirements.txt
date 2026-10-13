@@ -3,3 +3,4 @@ pandas
 numpy
 requests
 urllib3
+Pillow>=9.1

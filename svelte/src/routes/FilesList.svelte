@@ -1,16 +1,25 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { onLoadWorkflow, onScroll, fetchFiles, WHITE_EXTS } from './utils';
+  import { onMount, onDestroy } from 'svelte';
+  import { onLoadWorkflow, onScroll, fetchFiles, WHITE_EXTS, sortBrowserFiles } from './utils';
   import { t } from 'svelte-i18n';
   import type { FOLDER_TYPES } from './utils';
+  import FileToolbar from './FileToolbar.svelte';
   import MediaShow from './MediaShow.svelte';
   import type Toast from './Toast.svelte';
 
   export let comfyUrl: string;
   export let folderType: FOLDER_TYPES;
   export let toast: Toast;
-  export let folderPath: string;
-  $: if (folderPath != undefined) {
+  export let folderPath = '';
+  let mounted = false;
+  let selected: string[] = [];
+  let sortBy = 'name';
+  let sortOrder = 'asc';
+  let error = '';
+  let requestNumber = 0;
+  $: { searchQuery; selected = []; showCursor = 20; }
+  $: displayedFiles = sortBrowserFiles(files.filter(f => searchRegex.test(f.name.toLowerCase())), sortBy, sortOrder);
+  $: if (mounted && folderPath != undefined) {
     refresh();
   }
 
@@ -33,27 +42,38 @@
   }
 
   export async function refresh() {
+    const current = ++requestNumber;
+    selected = [];
+    showCursor = 20;
     loaded = false;
-    files = await fetchFiles(folderType, comfyUrl, folderPath);
-    loaded = true;
+    error = '';
+    try {
+      const next = await fetchFiles(folderType, comfyUrl, folderPath);
+      if (current === requestNumber) files = next;
+    } catch (err) {
+      if (current === requestNumber) { error = String(err); files = []; }
+    } finally {
+      if (current === requestNumber) loaded = true;
+    }
   }
 
-  onMount(async () => {
+  const onShow = () => refresh();
+  const handleScroll = () => {
+    showCursor = onScroll(showCursor, displayedFiles.length);
+    scrollTop = window.scrollY;
+  };
+  onMount(() => {
     //@ts-ignore
     comfyApp = window.top.app;
-
-    //@ts-ignore
-    window.top.addEventListener("comfyuiBrowserShow", () => {
-      refresh();
-    });
-
-    folderPath = '';
-
-    window.addEventListener('scroll', (e) => {
-      showCursor = onScroll(showCursor, files.length);
-      //@ts-ignore
-      scrollTop = (e.target.scrollingElement as HTMLElement).scrollTop;
-    });
+    window.top?.addEventListener('comfyuiBrowserShow', onShow);
+    window.addEventListener('scroll', handleScroll);
+    mounted = true;
+  });
+  onDestroy(() => {
+    if (!mounted) return;
+    window.top?.removeEventListener('comfyuiBrowserShow', onShow);
+    window.removeEventListener('scroll', handleScroll);
+    requestNumber++;
   });
 
   async function onCollect(file: any) {
@@ -136,12 +156,15 @@
   />
 </div>
 
-<div class="grid grid-cols-4 lg:grid-cols-6 gap-2">
-  {#each files
-    .filter((f) => searchRegex.test(f.name.toLowerCase()))
-    .slice(0, showCursor) as file}
+<FileToolbar files={displayedFiles} bind:selected bind:sortBy bind:sortOrder {folderType} {folderPath} {comfyUrl} />
+{#if error}<p class="alert alert-error" role="alert">{error}</p>{/if}
+<div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2">
+  {#each displayedFiles.slice(0, showCursor) as file (file.name)}
     {#if WHITE_EXTS.includes(file.fileType)}
       <div class="p-2 bg-info-content">
+        {#if file.type !== 'dir'}
+          <label class="flex items-center gap-2 text-xs mb-1"><input class="checkbox checkbox-sm" type="checkbox" bind:group={selected} value={file.name} aria-label={`Select ${file.name}`} />Select</label>
+        {/if}
         <div class="flex items-center">
           <MediaShow {file} styleClass="w-full h-16 sm:h-36" {onClickDir} />
         </div>
@@ -157,6 +180,7 @@
         </p>
 
         <div class="">
+          {#if file.type !== 'dir'}<a class="btn btn-link btn-sm p-0 no-underline text-accent" href={file.downloadUrl} download>Download</a>{/if}
           {#if comfyApp && file.type != 'dir'}
             <button
               class="btn btn-link btn-sm p-0 no-underline text-accent"
@@ -185,14 +209,14 @@
 </div>
 
 <div class="flex justify-center">
-  {#if files.length > showCursor}
+  {#if displayedFiles.length > showCursor}
     <button on:click={() => showCursor += 10} class="btn btn-neutral btn-outline">Load more</button>
   {:else}
     <p class="text-neutral-content">No more content.</p>
   {/if}
 </div>
 
-{#if files.length === 0}
+{#if displayedFiles.length === 0 && !error}
   <div class="w-full h-full flex items-center justify-center">
     <span class="font-bold text-4xl">
       {#if loaded}

@@ -5,6 +5,7 @@ import server
 
 from .utils import collections_path, browser_path, sources_path, download_logs_path, outputs_path
 from .routes import sources, collections, config, files, downloads, xyz_plot as xyz_plot_routes
+from .routes import archives, thumbnails
 from .nodes import select_inputs, load_image_by_url, xyz_plot, dify_text_generator, upload_to_remote
 
 
@@ -14,6 +15,10 @@ browser_app.add_routes([
     web.delete("/files", files.api_delete_file),
     web.put("/files", files.api_update_file),
     web.get("/files/view", files.api_view_file),
+    web.post("/files/archive", archives.api_download_archive),
+    web.get("/files/thumbnail", thumbnails.api_thumbnail),
+    web.get("/cache", thumbnails.api_cache_status),
+    web.delete("/cache", thumbnails.api_cache_status),
 
     web.post("/collections", collections.api_add_to_collections),
     web.post("/collections/workflows", collections.api_create_new_workflow),
@@ -37,7 +42,7 @@ browser_app.add_routes([
 
     web.static("/web", os.path.join(browser_path, 'web/build')),
 
-    web.static("/s/outputs", outputs_path()),
+    web.get("/s/outputs/{relative_path:.*}", files.api_static_output),
     web.static("/s/collections", collections_path()),
     web.static("/s/sources", sources_path()),
 ])

@@ -2,6 +2,8 @@
   export let file: any;
   export let styleClass: string;
   export let onClickDir: Function;
+  let previewFailed = false;
+  $: if (file.previewUrl) previewFailed = false;
 </script>
 
 
@@ -17,8 +19,9 @@
     </button>
   {:else}
     <a
-      href={file.url}
+      href={file.originalUrl || file.url}
       target="_blank"
+      rel="noopener noreferrer"
       style="height: inherit; width: inherit;"
     >
       {#if file.fileType === 'json'}
@@ -35,23 +38,19 @@
           </span>
         </div>
       {/if}
-      {#if file.fileType === 'image'}
+      {#if ['image', 'video'].includes(file.fileType) && !previewFailed}
         <img
           class="h-full w-full object-contain"
           loading="lazy"
+          decoding="async"
           src={file.previewUrl}
+          on:error={() => previewFailed = true}
           alt={file.name} />
       {/if}
-      {#if file.fileType === 'video'}
-        <video
-          class="h-full w-full object-contain pb-0.5 border-0.5 border-black"
-          src={file.previewUrl}
-          loop={true}
-          autoplay={true}
-          muted={true}
-        >
-          <track kind="captions" />
-        </video>
+      {#if previewFailed}
+        <div class="w-full h-full flex items-center justify-center text-center p-2 text-sm">Preview unavailable · Open original</div>
+      {:else if file.fileType === 'video'}
+        <span class="text-xs">▶ Open video</span>
       {/if}
     </a>
   {/if}

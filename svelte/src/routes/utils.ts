@@ -11,10 +11,12 @@ export const WHITE_EXTS = ['html', 'image', 'video', 'json', 'dir'];
 const localStorageKey = 'comfyui-browser';
 
 function getFileUrl(comfyUrl: string, folderType: string, file: any) {
+  const filename = encodeURIComponent(file.name);
+  const folderPath = (file.folder_path || '').split('/').map(encodeURIComponent).join('/');
   if (file.folder_path) {
-    return `${comfyUrl}/browser/s/${folderType}/${file.folder_path}/${file.name}`;
+    return `${comfyUrl}/browser/s/${folderType}/${folderPath}/${filename}`;
   } else {
-    return `${comfyUrl}/browser/s/${folderType}/${file.name}`;
+    return `${comfyUrl}/browser/s/${folderType}/${filename}`;
   }
 }
 
@@ -57,8 +59,11 @@ function processFile(
   }
 
   file['url'] = getFileUrl(comfyUrl, folderType, file);
+  file['originalUrl'] = file['url'];
+  const params = new URLSearchParams({folder_type: folderType, folder_path: file.folder_path || '', filename: file.name});
+  file['downloadUrl'] = `${comfyUrl}/browser/files/view?${params}&download=1`;
   if (['image', 'video'].includes(file['fileType'])) {
-    file['previewUrl'] = getFileUrl(comfyUrl, folderType, file);
+    file['previewUrl'] = `${comfyUrl}/browser/files/thumbnail?${params}&v=${file.mtime_ns || file.modified_at || ''}`;
 
     let jsonFile = findFile(file.name, JSON_EXTS, files);
     if (jsonFile) {
@@ -66,7 +71,7 @@ function processFile(
     }
   }
 
-  const d = dayjs.unix(file.created_at);
+  const d = dayjs.unix(file.modified_at ?? file.created_at);
   file['formattedDatetime'] = d.format('YYYY-MM-DD HH:mm:ss');
   file['formattedSize'] = formatFileSize(file['bytes']);
 
@@ -79,7 +84,7 @@ function processDir(dir: any) {
   const newFolderPath = dir.folder_path ? `${dir.folder_path}/${dir.name}` : dir.name;
   dir['path'] = newFolderPath;
 
-  const d = dayjs.unix(dir.created_at);
+  const d = dayjs.unix(dir.modified_at ?? dir.created_at);
   dir['formattedDatetime'] = d.format('YYYY-MM-DD HH-mm-ss');
 
   dir['formattedSize'] = '0 KB';
@@ -91,12 +96,10 @@ export async function fetchFiles(
   comfyUrl: string,
   folderPath?: string,
 ) {
-  let url = comfyUrl + '/browser/files?folder_type=' + folderType;
-  if (folderPath) {
-    url = url + `&folder_path=${folderPath}&`;
-  }
+  const url = comfyUrl + '/browser/files?' + new URLSearchParams({folder_type: folderType, folder_path: folderPath || ''});
 
   const res = await fetch(url);
+  if (!res.ok) throw new Error(await res.text() || 'Could not load files');
   const ret = await res.json();
 
   let files = ret.files;
@@ -156,7 +159,7 @@ export function getLocalConfig() {
   let localConfig: any = {};
 
   if (localConfigStr) {
-    localConfig = JSON.parse(localConfigStr);
+    try { localConfig = JSON.parse(localConfigStr) || {}; } catch { localConfig = {}; }
   }
 
   return localConfig;
@@ -169,9 +172,25 @@ export function setLocalConfig(key: string, value: any) {
 }
 
 export function formatFileSize(size: number) {
-  if (size / 1024 / 1024 > 1) {
+  if (size >= 1024 ** 3) {
+    return (size / 1024 ** 3).toFixed(2) + ' GB';
+  } else if (size / 1024 / 1024 > 1) {
     return (size / 1024 / 1024).toFixed(2) + ' MB';
   } else {
     return Math.round(size / 1024) + ' KB';
   }
+}
+
+const filenameCollator = new Intl.Collator(undefined, {numeric: true, sensitivity: 'base'});
+export function sortBrowserFiles(files: any[], field = 'name', order = 'asc') {
+  const direction = order === 'desc' ? -1 : 1;
+  return [...files].sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+    const byName = filenameCollator.compare(a.name, b.name);
+    let result = byName;
+    if (field === 'mtime') result = (a.modified_at || 0) - (b.modified_at || 0);
+    if (field === 'size') result = a.bytes - b.bytes;
+    if (field === 'type') result = filenameCollator.compare(a.name.split('.').pop(), b.name.split('.').pop());
+    return result ? direction * result : byName;
+  });
 }
