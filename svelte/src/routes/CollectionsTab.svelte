@@ -1,9 +1,11 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { t } from 'svelte-i18n';
   import { fetchFiles, onLoadWorkflow, onScroll } from './utils';
   import MediaShow from './MediaShow.svelte';
   import Toast from './Toast.svelte';
+  import DeleteTargetHint from './DeleteTargetHint.svelte';
+  import { playBrowserSound } from '../../../web/sounds.js';
 
   export let comfyUrl: string;
 
@@ -14,11 +16,27 @@
   let config: any = {};
   let configGitRepo = '';
   let showCursor = 20;
+  let filteredFiles: Array<any> = [];
+  let sortedFiles: Array<any> = [];
+  let sortBy: 'time' | 'name' | 'size' = 'time';
+  let sortDirection: 'asc' | 'desc' = 'desc';
   let toast: Toast;
+  let hoveredFile: any = null;
+  let deleteConfirmFile: any = null;
+  let deleteHintX = 0;
+  let deleteHintY = 0;
+  let pointerX = 0;
+  let pointerY = 0;
   let folderPath: string;
   let loaded: boolean = false;
   let searchQuery = '';
   let searchRegex = new RegExp('');
+  let folderHistory = [''];
+  let folderHistoryIndex = 0;
+  let mouseNavigationHandled = false;
+  let canGoBack = false;
+  let canGoForward = false;
+  $: breadcrumbs = getBreadcrumbs(folderPath || '');
 
   $: if (folderPath != undefined) {
     refresh();
@@ -32,6 +50,36 @@
 
   $: tt = function(key: string) {
     return $t('collectionsTab.' + key);
+  }
+
+  $: filteredFiles = files.filter((file) => searchRegex.test(file.name.toLowerCase()) || searchRegex.test((file.notes || '').toLowerCase()));
+  $: sortedFiles = sortFiles(filteredFiles, sortBy, sortDirection);
+
+  function sortFiles(source: Array<any>, key: 'time' | 'name' | 'size', direction: 'asc' | 'desc') {
+    const sign = direction === 'asc' ? 1 : -1;
+    return [...source].sort((a, b) => {
+      const directoryOrder = Number(a.type === 'file') - Number(b.type === 'file');
+      if (directoryOrder) return directoryOrder;
+      const result = key === 'name'
+        ? String(a.name).localeCompare(String(b.name), undefined, { numeric: true, sensitivity: 'base' })
+        : (Number(a[key === 'time' ? 'created_at' : 'bytes']) || 0) - (Number(b[key === 'time' ? 'created_at' : 'bytes']) || 0);
+      return result === 0 ? String(a.name).localeCompare(String(b.name), undefined, { numeric: true, sensitivity: 'base' }) : result * sign;
+    });
+  }
+
+  function onSortChange(event: Event) {
+    const value = (event.currentTarget as HTMLSelectElement).value;
+    if (value === 'time' || value === 'name' || value === 'size') {
+      sortBy = value;
+      showCursor = 20;
+      localStorage.setItem('comfyui-browser-sort-by', value);
+    }
+  }
+
+  function toggleSortDirection() {
+    sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+    showCursor = 20;
+    localStorage.setItem('comfyui-browser-sort-direction', sortDirection);
   }
 
   async function refresh() {
@@ -50,13 +98,111 @@
     });
 
     folderPath = '';
+    resetFolderHistory();
     config = (await fetchConfig()) || {};
     configGitRepo = config?.git_repo;
 
     window.addEventListener('scroll', () => {
       showCursor = onScroll(showCursor, files.length);
     });
+    window.addEventListener('keydown', onFolderShortcut);
+    window.addEventListener('keydown', onFileShortcut);
+    window.addEventListener('pointerdown', onMouseNavigationCapture, true);
+    window.addEventListener('pointerup', onMouseNavigationCapture, true);
+    window.addEventListener('mousedown', onMouseNavigationCapture, true);
+    window.addEventListener('mouseup', onMouseNavigationCapture, true);
+    window.addEventListener('auxclick', onMouseNavigationCapture, true);
+    window.addEventListener('pointermove', onGlobalPointerMove);
+    const savedSortBy = localStorage.getItem('comfyui-browser-sort-by');
+    if (savedSortBy === 'time' || savedSortBy === 'name' || savedSortBy === 'size') sortBy = savedSortBy;
+    const savedSortDirection = localStorage.getItem('comfyui-browser-sort-direction');
+    if (savedSortDirection === 'asc' || savedSortDirection === 'desc') sortDirection = savedSortDirection;
   });
+
+  onDestroy(() => {
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('keydown', onFolderShortcut);
+      window.removeEventListener('keydown', onFileShortcut);
+      window.removeEventListener('pointerdown', onMouseNavigationCapture, true);
+      window.removeEventListener('pointerup', onMouseNavigationCapture, true);
+      window.removeEventListener('mousedown', onMouseNavigationCapture, true);
+      window.removeEventListener('mouseup', onMouseNavigationCapture, true);
+      window.removeEventListener('auxclick', onMouseNavigationCapture, true);
+      window.removeEventListener('pointermove', onGlobalPointerMove);
+    }
+  });
+
+  function updateFolderHistoryButtons() {
+    canGoBack = folderHistoryIndex > 0;
+    canGoForward = folderHistoryIndex < folderHistory.length - 1;
+  }
+
+  function resetFolderHistory(path = '') {
+    folderHistory = [path];
+    folderHistoryIndex = 0;
+    updateFolderHistoryButtons();
+  }
+
+  function navigateToFolder(path: string) {
+    if (path === folderPath) return;
+    playBrowserSound('navigate');
+    folderHistory = folderHistory.slice(0, folderHistoryIndex + 1);
+    folderHistory.push(path);
+    folderHistoryIndex = folderHistory.length - 1;
+    folderPath = path;
+    updateFolderHistoryButtons();
+  }
+
+  function goBack() {
+    if (!canGoBack) { toast?.invalid(); return; }
+    playBrowserSound('navigate');
+    folderHistoryIndex -= 1;
+    folderPath = folderHistory[folderHistoryIndex];
+    updateFolderHistoryButtons();
+  }
+
+  function goForward() {
+    if (!canGoForward) { toast?.invalid(); return; }
+    playBrowserSound('navigate');
+    folderHistoryIndex += 1;
+    folderPath = folderHistory[folderHistoryIndex];
+    updateFolderHistoryButtons();
+  }
+
+  function onFolderShortcut(event: KeyboardEvent) {
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
+    if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.key === 'ArrowLeft' ? goBack() : goForward();
+  }
+
+  function onMouseNavigationCapture(event: MouseEvent | PointerEvent) {
+    if (event.button !== 3 && event.button !== 4) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (event.type === 'pointerdown' || event.type === 'mousedown') {
+      mouseNavigationHandled = false;
+      return;
+    }
+    if (event.type === 'pointerup' || event.type === 'mouseup') {
+      if (mouseNavigationHandled) return;
+      mouseNavigationHandled = true;
+      handleMouseNavigation(event.button);
+      return;
+    }
+    if (event.type === 'auxclick') {
+      if (!mouseNavigationHandled) handleMouseNavigation(event.button);
+      mouseNavigationHandled = false;
+    }
+  }
+
+  function handleMouseNavigation(button: number) {
+    button === 3 ? goBack() : goForward();
+  }
 
   async function fetchConfig() {
     const res = await fetch(comfyUrl + '/browser/config');
@@ -80,6 +226,7 @@
     btn.innerHTML = tt('btn.sync');
 
     folderPath = '';
+    resetFolderHistory();
     files = await fetchFiles(folderType, comfyUrl);
   }
 
@@ -99,12 +246,90 @@
     );
   }
 
-  async function onDelete(file: any) {
-    const ret = confirm(tt('toast.deleteConfirm') + file.name);
-    if (!ret) {
+  function openDeleteConfirm(file: any) {
+    if (!file) return;
+    deleteConfirmFile = file;
+    positionDeleteHint(pointerX, pointerY);
+  }
+
+  function positionDeleteHint(x: number, y: number) {
+    deleteHintX = Math.max(8, Math.min(window.innerWidth - 336, x + 16));
+    deleteHintY = Math.max(8, Math.min(window.innerHeight - 340, y + 16));
+  }
+
+  function onGlobalPointerMove(event: PointerEvent) {
+    pointerX = event.clientX;
+    pointerY = event.clientY;
+  }
+
+  function trackFileHover(file: any, event: PointerEvent) {
+    hoveredFile = file;
+    pointerX = event.clientX;
+    pointerY = event.clientY;
+  }
+
+  function cancelDelete() {
+    deleteConfirmFile = null;
+  }
+
+  async function removeFavorite(file: any) {
+    if (!file.favorite_reference_root) return;
+    const res = await fetch(comfyUrl + '/browser/favorites', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filename: file.source_filename || file.name,
+        folder_path: file.source_folder_path || '',
+        folder_type: file.source_folder_type,
+        root_id: file.source_root_id,
+        favorite: false,
+      }),
+    });
+    if (res.ok) {
+      playBrowserSound('action');
+      await refresh();
+    }
+    toast.show(res.ok, `Removed from Saves: ${file.name}`, 'Failed to remove from Saves');
+  }
+
+  function onFileShortcut(event: KeyboardEvent) {
+    if (deleteConfirmFile) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        cancelDelete();
+      }
       return;
     }
+    const target = event.target as HTMLElement | null;
+    if (!hoveredFile || target?.closest('input, textarea, select, [contenteditable="true"]')) return;
+    if (hoveredFile.favorite_reference && !hoveredFile.favorite_reference_root) return;
+    if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.key.toLowerCase() !== 'd') return;
+    event.preventDefault();
+    openDeleteConfirm(hoveredFile);
+  }
 
+  async function confirmDelete() {
+    const file = deleteConfirmFile;
+    if (!file) return;
+    cancelDelete();
+    if (file.favorite_reference_root) {
+      const res = await fetch(comfyUrl + '/browser/favorites', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename: file.source_filename || file.name,
+          folder_path: file.source_folder_path || '',
+          folder_type: file.source_folder_type,
+          root_id: file.source_root_id,
+          favorite: false,
+        }),
+      });
+      await refresh();
+      if (res.ok) playBrowserSound('action');
+      toast.show(res.ok, tt('toast.deleteSuccess') + file.name, tt('toast.deleteFailed'));
+      return;
+    }
+    if (file.favorite_reference) return;
     const res = await fetch(comfyUrl + '/browser/files', {
       method: 'DELETE',
       body: JSON.stringify({
@@ -115,6 +340,7 @@
     });
 
     refresh();
+    if (res.ok) playBrowserSound('action');
     toast.show(
       res.ok,
       tt('toast.deleteSuccess') + file.name,
@@ -139,6 +365,7 @@
   }
 
   async function updateFilename(e: Event, file: any) {
+    if (file.favorite_reference) return;
     const value = (e.target as HTMLInputElement).value;
     if (! isFilenameValid(value)) {
       toast.show(false, '', tt('toast.Invalid filename'));
@@ -162,6 +389,7 @@
   }
 
   async function updateFileNotes(e: Event, file: any) {
+    if (file.favorite_reference) return;
     //@ts-ignore
     const value = e.target.value;
     if (value == file.notes) {
@@ -182,19 +410,45 @@
   }
 
   async function onClickDir(dir: any) {
-    folderPath = dir.path;
-  }
-
-  async function onClickPath(index: number) {
-    if (index === -1) {
-      folderPath = '';
+    if (dir.favorite_reference_root) {
+      window.dispatchEvent(new CustomEvent('comfyuiBrowserNavigateToOutput', {
+        detail: {
+          rootId: dir.source_root_id || 'outputs',
+          folderPath: dir.source_folder_path || '',
+          folderName: dir.source_filename || dir.name,
+        },
+      }));
       return;
     }
+    navigateToFolder(dir.path);
+  }
 
-    folderPath = folderPath
-      .split('/')
-      .slice(0, index + 1)
-      .join('/');
+  function getBreadcrumbs(path: string) {
+    const parts = path.split('/').filter(Boolean);
+    if (parts[0] === '__favorite_refs__' && parts.length >= 2) {
+      let folderName = parts[1];
+      try {
+        const token = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+        const bytes = Uint8Array.from(atob(token), (char) => char.charCodeAt(0));
+        const key = JSON.parse(new TextDecoder().decode(bytes));
+        folderName = key[key.length - 1] || folderName;
+      } catch {
+        // Keep the token visible if it cannot be decoded.
+      }
+      const favoritePath = parts.slice(0, 2).join('/');
+      return [
+        { label: folderName, path: favoritePath },
+        ...parts.slice(2).map((part, index) => ({
+          label: part,
+          path: parts.slice(0, index + 3).join('/'),
+        })),
+      ];
+    }
+    return parts.map((part, index) => ({ label: part, path: parts.slice(0, index + 1).join('/') }));
+  }
+
+  function onClickPath(path: string) {
+    navigateToFolder(path);
   }
 
   function isFilenameValid(filename: string) {
@@ -244,12 +498,20 @@
 </div>
 
 <div class="max-w-full text-sm breadcrumbs flex flex-row ml-4">
+  <div class="flex items-center gap-1 shrink-0">
+    <button class="btn btn-ghost btn-sm px-1" aria-label="Back" title="Back (Alt+←)" aria-disabled={!canGoBack} on:click={goBack}>
+      <svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 18l-6-6 6-6" /></svg>
+    </button>
+    <button class="btn btn-ghost btn-sm px-1" aria-label="Forward" title="Forward (Alt+→)" aria-disabled={!canGoForward} on:click={goForward}>
+      <svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 18l6-6-6-6" /></svg>
+    </button>
+  </div>
   <ul class="basis-2/3">
     <li>
-      <button on:click={() => onClickPath(-1)}>{$t('common.rootDir')}</button>
+      <button on:click={() => onClickPath('')}>{$t('common.rootDir')}</button>
     </li>
-    {#each (folderPath || '').split('/') as path, index}
-      <li><button on:click={() => onClickPath(index)}>{path}</button></li>
+    {#each breadcrumbs as crumb}
+      <li><button on:click={() => onClickPath(crumb.path)}>{crumb.label}</button></li>
     {/each}
   </ul>
 
@@ -259,21 +521,33 @@
     bind:value={searchQuery}
     class="input input-bordered border-slate-600 w-full h-full rounded-none text-sm basis-1/3"
   />
+  <div class="flex shrink-0 items-center gap-0.5" aria-label="File sorting">
+    <select class="select select-bordered select-xs w-[4.5rem] px-1" aria-label="Sort files by" value={sortBy} on:change={onSortChange}>
+      <option value="time">时间</option>
+      <option value="name">名字</option>
+      <option value="size">大小</option>
+    </select>
+    <button class="btn btn-ghost btn-xs btn-square h-7 min-h-0 w-7" aria-label={sortDirection === 'desc' ? 'Descending order' : 'Ascending order'} title={sortDirection === 'desc' ? 'Descending' : 'Ascending'} on:click={toggleSortDirection}>{sortDirection === 'desc' ? '↓' : '↑'}</button>
+  </div>
 </div>
 
 <ul class="space-y-2">
-  {#each files
-    .filter((f) => searchRegex.test(f.name.toLowerCase()) || searchRegex.test(f.notes.toLowerCase()))
-    .slice(0, showCursor) as file}
-    <li class="flex h-16 sm:h-28 border-0 space-x-4 p-2 bg-info-content">
-      <MediaShow {file} styleClass="w-16 sm:w-28" {onClickDir} />
+  {#each sortedFiles.slice(0, showCursor) as file}
+    <li class="flex h-16 sm:h-28 border-0 space-x-4 p-2 bg-info-content rounded transition-shadow {deleteConfirmFile === file ? 'ring-2 ring-red-500 shadow-[0_0_26px_6px_rgba(239,68,68,.9)]' : ''}" on:pointerenter={(event) => trackFileHover(file, event)} on:pointermove={(event) => trackFileHover(file, event)} on:pointerleave={() => { if (hoveredFile === file) hoveredFile = null; }}>
+      <div class="w-16 sm:w-28 shrink-0"><MediaShow {file} styleClass="w-full" {onClickDir} /></div>
       <div class="space-y-2 w-96 relative">
-        <input
-          type="text"
-          class="input-bordered font-bold w-full bg-base-100"
-          on:blur={(e) => updateFilename(e, file)}
-          value={file.name}
-        />
+        <div class="flex min-w-0 items-center gap-2">
+          <input
+            type="text"
+            class="input-bordered min-w-0 flex-1 font-bold bg-base-100"
+            on:blur={(e) => updateFilename(e, file)}
+            readonly={!!file.favorite_reference}
+            value={file.name}
+          />
+          {#if file.favorite_reference_root}
+            <button class="btn btn-warning btn-xs shrink-0" aria-label={`Remove ${file.name} from Saves`} title="Remove from Saves" on:click={() => removeFavorite(file)}>取消收藏</button>
+          {/if}
+        </div>
         <p class="text-gray-500 text-xs hidden sm:block">
           {file.formattedDatetime} | {file.formattedSize}
         </p>
@@ -286,15 +560,6 @@
               >{$t('common.btn.load')}</button
             >
           {/if}
-          <button
-            class="btn btn-link btn-sm p-0 no-underline text-error ml-52"
-            on:click={async () => await onDelete(file)}
-          >
-            <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M16 2v4h6v2h-2v14H4V8H2V6h6V2h8zm-2 2h-4v2h4V4zm0 4H6v12h12V8h-4zm-5 2h2v8H9v-8zm6 0h-2v8h2v-8z" fill="#f77"/>
-            </svg>
-            {$t('common.btn.delete')}
-        </button>
         </div>
       </div>
 
@@ -304,15 +569,17 @@
           placeholder={tt('collection.memoPlaceholder')}
           on:blur={(e) => updateFileNotes(e, file)}
           class="resize-none textarea hidden md:block md:w-72 max-w-72 h-14 sm:h-24"
+          disabled={!!file.favorite_reference}
           value={file.notes}
         />
       </div>
     </li>
   {/each}
 </ul>
+<DeleteTargetHint file={deleteConfirmFile} x={deleteHintX} y={deleteHintY} onConfirm={confirmDelete} onCancel={cancelDelete} />
 
 <div class="flex justify-center">
-  {#if files.length > showCursor}
+  {#if sortedFiles.length > showCursor}
     <button on:click={() => showCursor += 10} class="btn btn-neutral btn-outline">Load more</button>
   {:else}
     <p class="text-neutral-content">No more content.</p>

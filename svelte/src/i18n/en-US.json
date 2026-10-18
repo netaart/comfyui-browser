@@ -47,7 +47,7 @@
   },
   "filesList": {
     "searchInput": {
-      "placeholder": "Filter by filename"
+      "placeholder": "Filter by filename or path fragment"
     },
     "Added to Saves": "Added to Saves",
     "Failed to add to Saves": "Failed to add to Saves. Please check the ComfyUI server.",

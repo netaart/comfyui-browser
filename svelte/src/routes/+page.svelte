@@ -4,7 +4,7 @@
   import CollectionsTab from './CollectionsTab.svelte';
   import SourcesTab from './SourcesTab.svelte';
   import ModelsTab from './ModelsTab.svelte';
-  import { getLocalConfig } from './utils';
+  import { getLocalConfig, setLocalConfig } from './utils';
   import { onMount } from 'svelte';
 
   // @type {import('./$types').PageData}
@@ -12,12 +12,23 @@
   const { comfyUrl } = data;
 
   let activeTab = 'outputs';
+  let outputNavigation: any = null;
+  let navigationSequence = 0;
+
+  function navigateToOutput(event: Event) {
+    const detail = (event as CustomEvent).detail || {};
+    outputNavigation = { ...detail, id: ++navigationSequence };
+    activeTab = 'outputs';
+    setLocalConfig('lastTab', 'outputs');
+  }
 
   onMount(() => {
     const config = getLocalConfig();
     if (config.lastTab) {
       activeTab = config.lastTab;
     }
+    window.addEventListener('comfyuiBrowserNavigateToOutput', navigateToOutput);
+    return () => window.removeEventListener('comfyuiBrowserNavigateToOutput', navigateToOutput);
   });
 </script>
 
@@ -30,5 +41,5 @@
 {:else if activeTab === 'models'}
   <ModelsTab {comfyUrl} />
 {:else}
-  <FilesTab {comfyUrl} />
+  <FilesTab {comfyUrl} navigation={outputNavigation} />
 {/if}

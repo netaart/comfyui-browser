@@ -1,0 +1,50 @@
+{
+  "owner": "Sean",
+  "description": "Filename token colors. Add lowercase terms to a category; category color is shared by all its terms.",
+  "numberColor": "#fcd34d",
+  "stageLetters": {
+    "a": "#fca5a5",
+    "b": "#fdba74",
+    "c": "#fde68a",
+    "d": "#bef264",
+    "e": "#86efac",
+    "f": "#67e8f9",
+    "g": "#93c5fd",
+    "h": "#c4b5fd"
+  },
+  "wordColors": {
+  },
+  "categories": {
+    "profession": {
+      "description": "Jobs, roles, and character archetypes",
+      "color": "#fda4af",
+      "terms": ["swordswoman", "swordwoman", "warrior", "samurai", "knight", "mage", "nurse", "doctor", "pilot", "teacher", "assassin", "priest", "archer", "soldier", "monk"]
+    },
+    "colorWords": {
+      "description": "Colors used as visual attributes in filenames",
+      "color": "#f0abfc",
+      "terms": ["red", "mag", "magenta", "orange", "yellow", "lime", "green", "cyan", "blue", "purple", "violet", "pink", "white", "black", "gray", "grey", "crimson", "scarlet", "teal", "navy", "gold", "silver"]
+    },
+    "directions": {
+      "description": "Position and orientation terms",
+      "color": "#67e8f9",
+      "terms": ["left", "right", "front", "back", "rear", "side", "top", "bottom", "upper", "lower", "above", "below", "north", "south", "east", "west", "center", "centre"]
+    },
+    "numberWords": {
+      "description": "English number words commonly used in filenames",
+      "color": "#fcd34d",
+      "terms": ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety", "hundred", "thousand"]
+    },
+    "objects": {
+      "description": "Weapons, clothing, props, and other tangible things",
+      "color": "#fdba74",
+      "terms": ["sword", "katana", "armor", "shield", "bow", "hat", "dress"]
+    },
+    "habits": {
+      "description": "Actions, routines, and mannerisms",
+      "color": "#86efac",
+      "terms": ["smoking", "reading", "meditating", "training", "walking", "running"]
+    }
+  },
+  "fallbackPalette": ["#a5f3fc", "#bbf7d0", "#fde68a", "#c4b5fd", "#fbcfe8", "#bfdbfe"]
+}

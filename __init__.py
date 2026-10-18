@@ -15,7 +15,14 @@ browser_app.add_routes([
     web.put("/files", files.api_update_file),
     web.get("/files/view", files.api_view_file),
 
+    web.get("/roots", config.api_get_browser_roots),
+    web.get("/roots/directories", config.api_browse_browser_directories),
+    web.post("/roots", config.api_add_browser_root),
+    web.put("/roots", config.api_reorder_browser_roots),
+    web.delete("/roots/{root_id}", config.api_delete_browser_root),
+
     web.post("/collections", collections.api_add_to_collections),
+    web.post("/favorites", collections.api_toggle_favorite),
     web.post("/collections/workflows", collections.api_create_new_workflow),
     web.post("/collections/sync", collections.api_sync_my_collections),
 

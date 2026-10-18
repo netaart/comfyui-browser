@@ -3,14 +3,35 @@ import type Toast from './Toast.svelte';
 
 export type FOLDER_TYPES = 'outputs' | 'collections' | 'sources';
 
-export const IMAGE_EXTS = ['png', 'webp', 'jpeg', 'jpg', 'gif'];
+export const IMAGE_EXTS = ['png', 'webp', 'jpeg', 'jpg', 'gif', 'svg'];
 export const VIDEO_EXTS = ['mp4', 'webm', 'mov', 'avi', 'mkv'];
+export const AUDIO_EXTS = ['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac'];
+export const TEXT_EXTS = ['txt', 'md', 'csv', 'log', 'html', 'json'];
 export const JSON_EXTS = ['json'];
-export const WHITE_EXTS = ['html', 'image', 'video', 'json', 'dir'];
+export const WHITE_EXTS = ['html', 'image', 'video', 'audio', 'text', 'markdown', 'json', 'dir'];
+const SUPPORTED_FILE_EXTS = ['html', 'json', ...IMAGE_EXTS, ...VIDEO_EXTS, ...AUDIO_EXTS, ...TEXT_EXTS];
 
 const localStorageKey = 'comfyui-browser';
 
-function getFileUrl(comfyUrl: string, folderType: string, file: any) {
+export function getFileUrl(comfyUrl: string, folderType: string, file: any, rootId = 'outputs') {
+  if (file.favorite_reference) {
+    const params = new URLSearchParams({
+      folder_type: file.source_folder_type || folderType,
+      root_id: file.source_root_id || rootId,
+      folder_path: file.source_folder_path || '',
+      filename: file.source_filename || file.name,
+    });
+    return `${comfyUrl}/browser/files/view?${params.toString()}`;
+  }
+  if (rootId !== 'outputs') {
+    const params = new URLSearchParams({
+      folder_type: folderType,
+      root_id: rootId,
+      folder_path: file.folder_path || '',
+      filename: file.name,
+    });
+    return `${comfyUrl}/browser/files/view?${params.toString()}`;
+  }
   if (file.folder_path) {
     return `${comfyUrl}/browser/s/${folderType}/${file.folder_path}/${file.name}`;
   } else {
@@ -36,9 +57,10 @@ function processFile(
   folderType: FOLDER_TYPES,
   comfyUrl: string,
   files: Array<any>,
+  rootId: string,
 ) {
   const extname = file.name.split('.').pop().toLowerCase();
-  if (WHITE_EXTS.includes(extname)) {
+  if (SUPPORTED_FILE_EXTS.includes(extname)) {
     file['fileType'] = extname;
     if (extname === 'json') {
       if (findFile(file.name, IMAGE_EXTS.concat(VIDEO_EXTS), files)) {
@@ -52,17 +74,26 @@ function processFile(
   if (VIDEO_EXTS.includes(extname)) {
     file['fileType'] = 'video';
   }
+  if (AUDIO_EXTS.includes(extname)) {
+    file['fileType'] = 'audio';
+  }
+  if (TEXT_EXTS.includes(extname) && !['html', 'json'].includes(extname)) {
+    file['fileType'] = 'text';
+  }
+  if (extname === 'md') {
+    file['fileType'] = 'markdown';
+  }
   if (! file['fileType']) {
     return;
   }
 
-  file['url'] = getFileUrl(comfyUrl, folderType, file);
+  file['url'] = getFileUrl(comfyUrl, folderType, file, rootId);
   if (['image', 'video'].includes(file['fileType'])) {
-    file['previewUrl'] = getFileUrl(comfyUrl, folderType, file);
+    file['previewUrl'] = getFileUrl(comfyUrl, folderType, file, rootId);
 
     let jsonFile = findFile(file.name, JSON_EXTS, files);
     if (jsonFile) {
-      file['url'] = getFileUrl(comfyUrl, folderType, jsonFile);
+      file['url'] = getFileUrl(comfyUrl, folderType, jsonFile, rootId);
     }
   }
 
@@ -73,16 +104,22 @@ function processFile(
   return file;
 }
 
-function processDir(dir: any) {
+function processDir(dir: any, folderType: FOLDER_TYPES, comfyUrl: string, rootId: string) {
   dir['fileType'] = 'dir';
 
   const newFolderPath = dir.folder_path ? `${dir.folder_path}/${dir.name}` : dir.name;
-  dir['path'] = newFolderPath;
+  dir['path'] = dir.path || newFolderPath;
+  dir['preview_items'] = (dir.preview_items || []).map((item: any) => ({
+    ...item,
+    previewUrl: item.fileType === 'image'
+      ? getFileUrl(comfyUrl, folderType, { ...item, name: item.name, folder_path: newFolderPath }, rootId)
+      : undefined,
+  }));
 
   const d = dayjs.unix(dir.created_at);
-  dir['formattedDatetime'] = d.format('YYYY-MM-DD HH-mm-ss');
+  dir['formattedDatetime'] = d.format('YYYY-MM-DD HH:mm:ss');
 
-  dir['formattedSize'] = '0 KB';
+  dir['formattedSize'] = formatFileSize(dir.bytes || 0);
   return dir;
 }
 
@@ -90,11 +127,14 @@ export async function fetchFiles(
   folderType: FOLDER_TYPES,
   comfyUrl: string,
   folderPath?: string,
+  rootId = 'outputs',
+  pathSearch = '',
+  showHidden = false,
 ) {
-  let url = comfyUrl + '/browser/files?folder_type=' + folderType;
-  if (folderPath) {
-    url = url + `&folder_path=${folderPath}&`;
-  }
+  const params = new URLSearchParams({ folder_type: folderType, root_id: rootId, folder_path: folderPath || '' });
+  if (pathSearch) params.set('path_search', pathSearch);
+  if (showHidden) params.set('show_hidden', '1');
+  const url = `${comfyUrl}/browser/files?${params.toString()}`;
 
   const res = await fetch(url);
   const ret = await res.json();
@@ -102,11 +142,12 @@ export async function fetchFiles(
   let files = ret.files;
   let newFiles: Array<any> = [];
   files.forEach((f: any) => {
+    if (f.type === 'dir' && (!f.children_count || f.children_count <= 0)) return;
     let newFile;
     if (f.type === 'dir') {
-      newFile = processDir(f);
+      newFile = processDir(f, folderType, comfyUrl, rootId);
     } else {
-      newFile = processFile(f, folderType, comfyUrl, files);
+      newFile = processFile(f, folderType, comfyUrl, files, rootId);
     }
 
     if (newFile) {
@@ -137,15 +178,22 @@ export async function onLoadWorkflow(file: any, comfyApp: any, toast: Toast) {
   const fileObj = new File([blob], file.name, {
     type: res.headers.get('Content-Type') || '',
   });
-  const f = comfyApp.loadGraphData.bind(comfyApp);
-  comfyApp.loadGraphData = async function(graphData: any) {
-    const modal = window.top?.document.getElementById('comfy-browser-dialog');
-    if (modal) {
-      modal.style.display = 'none';
+  const originalLoadGraphData = comfyApp.loadGraphData;
+  comfyApp.loadGraphData = async function(graphData: any, ...args: any[]) {
+    try {
+      return await originalLoadGraphData.call(this, graphData, ...args);
+    } finally {
+      const modal = window.top?.document.getElementById('comfy-browser-dialog');
+      if (modal) {
+        modal.style.display = 'none';
+      }
     }
-    await f(graphData);
+  };
+  try {
+    await comfyApp.handleFile(fileObj);
+  } finally {
+    comfyApp.loadGraphData = originalLoadGraphData;
   }
-  await comfyApp.handleFile(fileObj);
 
   toast.show(false, 'Loaded', 'No workflow found here');
 }
@@ -169,9 +217,8 @@ export function setLocalConfig(key: string, value: any) {
 }
 
 export function formatFileSize(size: number) {
-  if (size / 1024 / 1024 > 1) {
-    return (size / 1024 / 1024).toFixed(2) + ' MB';
-  } else {
-    return Math.round(size / 1024) + ' KB';
-  }
+  if (size >= 1024 * 1024 * 1024) return (size / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+  if (size >= 1024 * 1024) return (size / 1024 / 1024).toFixed(2) + ' MB';
+  if (size >= 1024) return (size / 1024).toFixed(1) + ' KB';
+  return Math.round(size) + ' B';
 }

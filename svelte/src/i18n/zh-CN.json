@@ -47,7 +47,7 @@
   },
   "filesList": {
     "searchInput": {
-      "placeholder": "根据文件名过滤"
+      "placeholder": "根据文件名或路径片段过滤"
     },
     "Added to Saves": "收藏成功",
     "Failed to add to Saves": "收藏失败。请在控制台查看详情。",

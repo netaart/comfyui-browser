@@ -4,7 +4,8 @@ import shutil
 import time
 
 from ..utils import collections_path, get_parent_path, add_uuid_to_filename, \
-    config_path, get_config, git_init, run_cmd, git_remote_name
+    config_path, get_config, git_init, run_cmd, git_remote_name, \
+    favorite_key, load_favorite_records, save_favorite_records, get_browser_root_path
 
 
 # filename, folder_path, folder_type = 'outputs' | 'sources'
@@ -35,6 +36,44 @@ async def api_add_to_collections(request):
     else:
         shutil.copy(source_file_path, new_filepath)
 
+    return web.Response(status=201)
+
+async def api_toggle_favorite(request):
+    data = await request.json()
+    filename = data.get('filename')
+    folder_path = data.get('folder_path', '')
+    folder_type = data.get('folder_type', 'outputs')
+    root_id = data.get('root_id')
+    is_favorite = bool(data.get('favorite', True))
+    if not filename or folder_type not in ('outputs', 'sources'):
+        return web.Response(status=400)
+
+    key = favorite_key(folder_type, folder_path, filename, root_id)
+    records = load_favorite_records()
+    if not is_favorite:
+        old_value = records.pop(key, None)
+        if isinstance(old_value, str):
+            # Keep the legacy snapshot out of Saves without deleting user data.
+            legacy_names = records.setdefault('__legacy_favorite_copies__', [])
+            if isinstance(legacy_names, list) and old_value not in legacy_names:
+                legacy_names.append(old_value)
+        if old_value is not None:
+            save_favorite_records(records)
+        return web.Response(status=200)
+
+    if key in records:
+        return web.Response(status=200)
+
+    parent_path = get_browser_root_path(root_id, folder_type)
+    if parent_path is None:
+        return web.Response(status=404)
+    source_path = path.join(parent_path, folder_path, filename)
+    if not path.exists(source_path):
+        return web.Response(status=404)
+    makedirs(collections_path(), exist_ok=True)
+    # Owner: Sean — favorite state is a reference marker; never copy source content.
+    records[key] = {'kind': 'reference'}
+    save_favorite_records(records)
     return web.Response(status=201)
 
 # filename, content
